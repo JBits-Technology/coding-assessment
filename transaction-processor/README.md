@@ -42,6 +42,12 @@ Encapsulates all account state. Internal transaction history must **not** be dir
 
 ```ts
 class Account {
+  private readonly accountNumber: string; // e.g. "ACC-001"
+  private readonly ownerName: string; // e.g. "Alice"
+  private readonly transactions: Transaction[]; // the internal ledger — never expose directly
+  private counter: number; // increments on each new transaction to produce
+  // unique IDs: TXN-001, TXN-002, TXN-003 ...
+
   constructor(accountNumber: string, ownerName: string, openingBalance: number);
 
   credit(amount: number, note?: string): Transaction;
@@ -125,7 +131,7 @@ After the example above, `acc.statement()` should contain these 7 transactions i
 ```
 CREDIT   +100000   POSTED    (opening balance)
 CREDIT   + 50000   POSTED    "Salary"
-HOLD     + 30000   POSTED    "Hotel authorisation"
+HOLD     + 30000   HELD      "Hotel authorisation"  → status changes to POSTED after capture
 DEBIT    - 20000   POSTED    "Rent"
 CAPTURE  + 30000   POSTED    (capture of h1)
 DEBIT    - 10000   REVERSED  "Groceries"
@@ -138,7 +144,8 @@ CREDIT   + 10000   POSTED    (reversal of t2)
 
 - `Account` must **not** expose its internal transaction list directly — no public array property.
 - `ledgerBalance`, `availableBalance`, and `pendingHolds` must be computed from internal state, not stored as mutable fields that are updated ad hoc.
-- All transaction IDs must be unique within an account. You may use a simple incrementing scheme e.g. `TXN-001`.
+- All transaction IDs must be unique within an account. Use the provided `counter` to generate them in the format `TXN-001`, `TXN-002`, etc.
+- The opening balance passed to the constructor must be posted as the first `CREDIT` transaction with note `"Opening balance"`.
 - `reverse()` must not be callable on a `HOLD` transaction — holds are cancelled via `release()` only.
 - A released or captured hold cannot be captured or released again.
 - A reversed transaction cannot be reversed again.
