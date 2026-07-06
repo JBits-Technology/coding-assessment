@@ -1,137 +1,145 @@
-# OOP DSA — Loan Ledger
+# TypeScript Assessment — Loan Ledger
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-blue) ![45 min](https://img.shields.io/badge/⏱-45%20min-lightgrey) ![No external libs](https://img.shields.io/badge/no%20external%20libs-green) ![Medium](https://img.shields.io/badge/difficulty-medium-orange)
 
-Model a borrower's loan account using a **singly linked list** where each node represents a disbursement or repayment event. You must implement the list yourself — no arrays or built-in collections as the underlying store.
+You are building the core of a loan management system for a borrower. The focus is on **clean class design and encapsulation** — model real-world loan behaviour using well-defined classes with clear responsibilities.
+
+---
+
+## Context
+
+A borrower takes out a loan (disbursement) and makes repayments over time. Each event is recorded as a transaction. The ledger must always reflect the current outstanding balance and provide a full statement of activity.
 
 ---
 
 ## Classes to implement
 
-### `LedgerNode`
+### `LoanTransaction`
 
-A single node in the singly linked list.
+Represents a single event on the loan account.
 
 ```ts
-type TransactionType = "DISBURSEMENT" | "REPAYMENT";
+type LoanTransactionType = "DISBURSEMENT" | "REPAYMENT";
 
-class LedgerNode {
-  id: number;
-  type: TransactionType;
-  amount: number;
-  next: LedgerNode | null;
+class LoanTransaction {
+  readonly id: string;
+  readonly type: LoanTransactionType;
+  readonly amount: number;
+  readonly createdAt: Date;
+  note: string | null;
 
-  constructor(id: number, type: TransactionType, amount: number);
+  constructor(
+    id: string,
+    type: LoanTransactionType,
+    amount: number,
+    note?: string,
+  );
 }
 ```
 
 ---
 
-### `LoanLedger`
+### `LoanAccount`
 
-Manages the loan lifecycle using `LedgerNode` as its internal structure.
+Encapsulates all loan state. The internal transaction list must **not** be directly accessible — expose it only through the public methods below.
 
 ```ts
-class LoanLedger {
-  constructor(borrowerName: string);
+class LoanAccount {
+  private readonly loanRef: string; // e.g. "LOAN-001"
+  private readonly borrowerName: string; // e.g. "Alice"
+  private readonly transactions: LoanTransaction[]; // internal ledger — never expose directly
+  private counter: number; // increments on each new transaction to produce
+  // unique IDs: TXN-001, TXN-002, TXN-003 ...
 
-  disburse(amount: number): void;
-  repay(amount: number): void;
-  balance(): number;
-  totalDisbursed(): number;
-  totalRepaid(): number;
+  constructor(loanRef: string, borrowerName: string);
+
+  disburse(amount: number, note?: string): LoanTransaction;
+  repay(amount: number, note?: string): LoanTransaction;
   undoLast(): void;
+
+  get balance(): number;
+  get totalDisbursed(): number;
+  get totalRepaid(): number;
+
   statement(): string[];
 }
 ```
 
-#### Method contracts
+---
 
-| Method             | Behaviour                                                                                                       |
-| ------------------ | --------------------------------------------------------------------------------------------------------------- |
-| `disburse(amount)` | Append a `DISBURSEMENT` node. Throws if `amount <= 0`.                                                          |
-| `repay(amount)`    | Append a `REPAYMENT` node. Throws if `amount <= 0`. Throws if `amount` exceeds the current outstanding balance. |
-| `balance()`        | Return total disbursed minus total repaid.                                                                      |
-| `totalDisbursed()` | Return the sum of all `DISBURSEMENT` nodes.                                                                     |
-| `totalRepaid()`    | Return the sum of all `REPAYMENT` nodes.                                                                        |
-| `undoLast()`       | Remove the most recently appended node (tail). No-op if the ledger is empty.                                    |
-| `statement()`      | Return a formatted string array — one line per node (see format below).                                         |
+## Balance rules
+
+| Property         | Definition                                                       |
+| ---------------- | ---------------------------------------------------------------- |
+| `balance`        | Total disbursed minus total repaid. The outstanding amount owed. |
+| `totalDisbursed` | Sum of all `DISBURSEMENT` transactions.                          |
+| `totalRepaid`    | Sum of all `REPAYMENT` transactions.                             |
+
+All three must be **computed** from the internal transaction list — not stored as mutable counters updated ad hoc.
+
+---
+
+## Method contracts
+
+| Method             | Behaviour                                                                                                                     |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `disburse(amount)` | Record a disbursement. Appends a `DISBURSEMENT` transaction. Throws if `amount <= 0`.                                         |
+| `repay(amount)`    | Record a repayment. Appends a `REPAYMENT` transaction. Throws if `amount <= 0`. Throws if `amount` exceeds current `balance`. |
+| `undoLast()`       | Remove the most recently appended transaction. No-op if the ledger is empty.                                                  |
+| `statement()`      | Return a formatted string array — one line per transaction with a running balance (see format below).                         |
 
 #### `statement()` line format
 
 ```
-#1  DISBURSEMENT  +50000.00   balance: 50000.00
-#2  REPAYMENT     -10000.00   balance: 40000.00
-#3  REPAYMENT     -5000.00    balance: 35000.00
-#4  DISBURSEMENT  +20000.00   balance: 55000.00
+TXN-001  DISBURSEMENT  +50000.00   balance: 50000.00
+TXN-002  REPAYMENT     -10000.00   balance: 40000.00
+TXN-003  REPAYMENT     - 5000.00   balance: 35000.00
 ```
-
-Each line must include the node's sequential number, type, signed amount (+ for disbursement, − for repayment), and the running balance at that point.
 
 ---
 
 ## Example usage
 
 ```ts
-const ledger = new LoanLedger("Alice");
+const loan = new LoanAccount("LOAN-001", "Alice");
 
-ledger.disburse(50_000);
-ledger.repay(10_000);
-ledger.repay(5_000);
-ledger.disburse(20_000);
+loan.disburse(50_000, "Initial disbursement");
+loan.repay(10_000, "Month 1");
+loan.repay(5_000, "Month 2");
+loan.disburse(20_000, "Top-up");
 
-console.log(ledger.balance()); // 55000
-console.log(ledger.totalDisbursed()); // 70000
-console.log(ledger.totalRepaid()); // 15000
+console.log(loan.balance); // 55000
+console.log(loan.totalDisbursed); // 70000
+console.log(loan.totalRepaid); // 15000
 
-ledger.undoLast(); // removes the second DISBURSEMENT
+loan.undoLast(); // removes the top-up disbursement
 
-console.log(ledger.balance()); // 35000
+console.log(loan.balance); // 35000
 
-ledger.repay(40_000); // throws — exceeds balance of 35000
+try {
+  loan.repay(40_000); // throws — exceeds balance of 35000
+} catch (e: any) {
+  console.log(e.message); // "Repayment exceeds outstanding balance"
+}
 
-console.log(ledger.statement());
+console.log(loan.statement());
 // [
-//   "#1  DISBURSEMENT  +50000.00   balance: 50000.00",
-//   "#2  REPAYMENT     -10000.00   balance: 40000.00",
-//   "#3  REPAYMENT     -5000.00    balance: 35000.00"
+//   "TXN-001  DISBURSEMENT  +50000.00   balance: 50000.00",
+//   "TXN-002  REPAYMENT     -10000.00   balance: 40000.00",
+//   "TXN-003  REPAYMENT     - 5000.00   balance: 35000.00"
 // ]
-```
-
----
-
-## Step-by-step trace
-
-```
-disburse(50000)  →  [DISBURSEMENT 50000]
-repay(10000)     →  [DISBURSEMENT 50000] → [REPAYMENT 10000]
-repay(5000)      →  [DISBURSEMENT 50000] → [REPAYMENT 10000] → [REPAYMENT 5000]
-disburse(20000)  →  [DISBURSEMENT 50000] → [REPAYMENT 10000] → [REPAYMENT 5000] → [DISBURSEMENT 20000]
-undoLast()       →  [DISBURSEMENT 50000] → [REPAYMENT 10000] → [REPAYMENT 5000]
-                     tail is now REPAYMENT 5000
 ```
 
 ---
 
 ## Requirements
 
-- `LoanLedger` must use `LedgerNode` as its internal structure — no arrays or maps as the primary store.
-- `undoLast()` must traverse to the second-to-last node and sever the tail — O(n).
-- `repay()` must validate against the current balance before appending.
-- `statement()` must compute a **running balance** per node in a single forward pass.
-- All pointer manipulation must be done via `next` references, not index arithmetic.
-- Node IDs must be sequential and stable — `undoLast()` must decrement the counter so a re-inserted node reuses the same ID slot.
-
----
-
-## Complexity targets
-
-| Operation            | Target                                 |
-| -------------------- | -------------------------------------- |
-| `disburse` / `repay` | O(1) — maintain a tail pointer         |
-| `balance`            | O(1) — maintain a running total        |
-| `undoLast`           | O(n) — must traverse to second-to-last |
-| `statement`          | O(n)                                   |
+- `LoanAccount` must **not** expose its internal transaction list directly — no public array property.
+- `balance`, `totalDisbursed`, and `totalRepaid` must be computed from the transaction list, not stored as separate mutable counters.
+- All transaction IDs must be unique. Use the provided `counter` to generate them in the format `TXN-001`, `TXN-002`, etc.
+- `undoLast()` must also decrement the `counter` so the next transaction reuses the same ID slot.
+- `repay()` must validate against the current `balance` before appending.
+- `statement()` must compute a running balance in a single forward pass over the transaction list.
 
 ---
 
@@ -142,11 +150,19 @@ undoLast()       →  [DISBURSEMENT 50000] → [REPAYMENT 10000] → [REPAYMENT 
 | `repay` with amount > balance          | Throw `Error("Repayment exceeds outstanding balance")`. |
 | `disburse` or `repay` with amount <= 0 | Throw `Error("Amount must be greater than zero")`.      |
 | `undoLast()` on empty ledger           | No-op — do not throw.                                   |
-| `undoLast()` on single-node ledger     | Ledger becomes empty; head and tail are both `null`.    |
-| `balance()` on empty ledger            | Return `0`.                                             |
+| `balance` on empty ledger              | Return `0`.                                             |
 | `statement()` on empty ledger          | Return `[]`.                                            |
 
 > **Note:** No external libraries. Standard TypeScript only. Submit a single `.ts` file with both classes and the example usage above executed at the bottom.
+
+---
+
+## What we are looking for
+
+- **Encapsulation** — internal state is hidden; the public interface is the only way in.
+- **Single responsibility** — `LoanTransaction` owns its data; `LoanAccount` owns business rules.
+- **Guard clauses** — validation at the boundary before any state change.
+- **Computed properties** — balances derived from the transaction list, not tracked separately.
 
 ---
 
@@ -154,6 +170,6 @@ undoLast()       →  [DISBURSEMENT 50000] → [REPAYMENT 10000] → [REPAYMENT 
 
 Be ready to discuss after submission:
 
-1. You maintain a tail pointer for O(1) append — but `undoLast()` is still O(n). How would you make it O(1), and what data structure would you use?
-2. `repay()` validates against the current balance. Where do you store that state — do you recompute it on every call or maintain it incrementally? What are the trade-offs?
-3. How would you extend this to support multiple loans per borrower, each with its own ledger, while sharing a single transaction ID sequence across all of them?
+1. `balance`, `totalDisbursed`, and `totalRepaid` each traverse the full transaction list. How would you optimise this without breaking encapsulation?
+2. `undoLast()` removes the last transaction. How would you extend this into a full undo/redo system?
+3. How would you modify `LoanAccount` to support multiple disbursements with different interest rates, while keeping `balance` accurate?
