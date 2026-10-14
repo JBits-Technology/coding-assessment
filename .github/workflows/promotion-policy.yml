@@ -1,0 +1,150 @@
+name: Promotion Policy
+
+on:
+  pull_request_target:
+    branches: [dev, uat, main]
+    types: [opened, reopened, synchronize, edited, ready_for_review, closed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: promotion-policy-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+jobs:
+  enforce-promotion:
+    name: Enforce promotion policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Evaluate authoritative PR metadata and publish the required status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          def allowed(base, head, same_repository):
+              if not same_repository:
+                  return False
+              if base == "dev":
+                  return head not in {"dev", "uat", "main", "development", "develop"}
+              return base in {"uat", "main"} and {"uat": "dev", "main": "uat"}[base] == head
+
+          cases = [
+              ("dev", "feat/example", True, True),
+              ("dev", "fix/example", True, True),
+              ("dev", "ci/example", True, True),
+              ("uat", "dev", True, True),
+              ("main", "uat", True, True),
+              ("uat", "fix/example", True, False),
+              ("main", "dev", True, False),
+              ("main", "fix/example", True, False),
+              ("dev", "main", True, False),
+              ("dev", "development", True, False),
+              ("dev", "fix/example", False, False),
+              ("uat", "dev", False, False),
+              ("main", "uat", False, False),
+              ("other", "fix/example", True, False),
+          ]
+          for base, head, same_repository, expected in cases:
+              if allowed(base, head, same_repository) != expected:
+                  raise SystemExit("Promotion policy self-test failed.")
+          print(f"PASS: {len(cases)} promotion policy cases.")
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          api = os.environ["GITHUB_API_URL"]
+          with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as source:
+              event = json.load(source)
+          number = int(event["number"])
+
+          def request(path, payload=None):
+              body = None if payload is None else json.dumps(payload).encode("utf-8")
+              req = urllib.request.Request(
+                  api + path,
+                  data=body,
+                  headers={
+                      "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "Content-Type": "application/json",
+                  },
+                  method="GET" if payload is None else "POST",
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=10) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as error:
+                  raise SystemExit(f"GitHub API request failed: HTTP {error.code}.") from None
+              except urllib.error.URLError:
+                  raise SystemExit("GitHub API connection failed.") from None
+
+          def related_open_prs(head_sha):
+              related = []
+              page = 1
+              while True:
+                  rows = request(f"/repos/{repository}/pulls?state=open&per_page=100&page={page}")
+                  related.extend(pr for pr in rows if pr["state"] == "open" and pr["head"]["sha"] == head_sha)
+                  if len(rows) < 100:
+                      return related
+                  page += 1
+
+          trigger = request(f"/repos/{repository}/pulls/{number}")
+          targets = [number] if trigger["state"] == "open" else [
+              pr["number"] for pr in related_open_prs(trigger["head"]["sha"])
+          ]
+          failed = False
+          for target in targets:
+              for attempt in range(8):
+                  pr = request(f"/repos/{repository}/pulls/{target}")
+                  if pr["state"] != "open":
+                      break
+                  if pr.get("mergeable") is False:
+                      raise SystemExit("STOP: Resolve PR conflicts before policy validation.")
+                  sha = pr.get("merge_commit_sha")
+                  if pr.get("mergeable") is True and isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha):
+                      break
+                  if attempt < 7:
+                      time.sleep(2)
+              else:
+                  raise SystemExit("STOP: Current test merge commit is unavailable.")
+              if pr["state"] != "open":
+                  continue
+              head_repo = pr["head"].get("repo") or {}
+              base_repo = pr["base"]["repo"]
+              same_repository = (
+                  head_repo.get("id") == base_repo["id"]
+                  and base_repo["full_name"].lower() == repository.lower()
+              )
+              base, head = pr["base"]["ref"], pr["head"]["ref"]
+              peers = related_open_prs(pr["head"]["sha"])
+              unique = len(peers) == 1 and peers[0]["number"] == target
+              passed = unique and allowed(base, head, same_repository)
+              description = (
+                  "Blocked: source SHA is shared by open PRs; close duplicate/probe PRs."
+                  if not unique else
+                  "Allowed: working branch to dev, dev to uat, or uat to main."
+                  if passed else
+                  "Blocked: use a same-repository working branch to dev, dev to uat, or uat to main."
+              )
+              request(f"/repos/{repository}/statuses/{sha}", {
+                  "state": "success" if passed else "failure",
+                  "context": "Promotion Policy",
+                  "description": description,
+                  "target_url": os.environ["GITHUB_SERVER_URL"] + "/" + repository + "/actions/runs/" + os.environ["GITHUB_RUN_ID"],
+              })
+              print(f"PR #{target}: {description}")
+              failed = failed or not passed
+          if failed:
+              raise SystemExit("STOP: PR source is disallowed or ambiguous.")
+
+          PY
